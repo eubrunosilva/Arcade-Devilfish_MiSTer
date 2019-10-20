@@ -30,7 +30,7 @@ module emu
 	input         RESET,
 
 	//Must be passed to hps_io module
-	inout  [44:0] HPS_BUS,
+	inout  [45:0] HPS_BUS,
 
 	//Base video clock. Usually equals to CLK_SYS.
 	output        VGA_CLK,
@@ -45,7 +45,7 @@ module emu
 	output        VGA_HS,
 	output        VGA_VS,
 	output        VGA_DE,    // = ~(VBlank | HBlank)
-
+	output        VGA_F1,
 	//Base video clock. Usually equals to CLK_SYS.
 	output        HDMI_CLK,
 
@@ -75,9 +75,19 @@ module emu
 
 	output [15:0] AUDIO_L,
 	output [15:0] AUDIO_R,
-	output        AUDIO_S    // 1 - signed audio samples, 0 - unsigned
+	output        AUDIO_S,    // 1 - signed audio samples, 0 - unsigned
+
+	// Open-drain User port.
+	// 0 - D+/RX
+	// 1 - D-/TX
+	// 2..6 - USR2..USR6
+	// Set USER_OUT to 1 to read from USER_IN.
+	input   [6:0] USER_IN,
+	output  [6:0] USER_OUT
 );
 
+assign VGA_F1    = 0;
+assign USER_OUT  = '1;
 assign LED_USER  = ioctl_download;
 assign LED_DISK  = 0;
 assign LED_POWER = 0;
@@ -98,12 +108,12 @@ localparam CONF_STR = {
 	"OA,Cabinet,Upright,Cocktail;",	
 	"R0,Reset;",
 	"J,Fire,Start 1P,Start 2P;",
-	"V,v2.10.",`BUILD_DATE
+	"V,v",`BUILD_DATE
 };
 
 ////////////////////   CLOCKS   ///////////////////
 
-wire clk_sys, clk_18, clk_6;
+wire clk_48, clk_sys, clk_18, clk_6;
 wire pll_locked;
 
 wire clk_hdmi;
@@ -115,6 +125,7 @@ pll pll
 	.outclk_1(clk_sys),
 	.outclk_2(clk_6),
 	.outclk_3(clk_hdmi),
+	.outclk_4(clk_48),
 	.locked(pll_locked)
 );
 
@@ -134,6 +145,8 @@ wire [10:0] ps2_key;
 wire [15:0] joystick_0,joystick_1;
 wire [15:0] joy = joystick_0 | joystick_1;
 
+wire [21:0] gamma_bus;
+
 hps_io #(.STRLEN($size(CONF_STR)>>3)) hps_io
 (
 	.clk_sys(clk_sys),
@@ -149,6 +162,7 @@ hps_io #(.STRLEN($size(CONF_STR)>>3)) hps_io
 	.ioctl_wr(ioctl_wr),
 	.ioctl_addr(ioctl_addr),
 	.ioctl_dout(ioctl_dout),
+	.gamma_bus(gamma_bus),
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -196,17 +210,24 @@ wire m_start2 = btn_two_players | joy[6];
 wire m_coin   = m_start1 | m_start2;
 
 wire hblank, vblank;
-wire ce_vid = clk_6;
 wire hs, vs;
 wire rde, rhs, rvs;
 wire [2:0] r,g,b;
 
-arcade_rotate_fx #(257,224,9,1) arcade_video
+wire [2:0] fx = status[2] ? 3'b0 : status[5:3];
+
+reg ce_pix;
+always @(posedge clk_48) begin
+	reg old_clk;
+	
+	old_clk <= clk_sys;
+	ce_pix <= old_clk & ~clk_sys;
+end
+arcade_rotate_fx #(514,224,9,1) arcade_video
 (
         .*,
 
-        .clk_video(clk_sys),
-		  .ce_pix(ce_vid),
+        .clk_video(clk_48),
 
         .RGB_in({r,g,b}),
         .HBlank(hblank),
@@ -214,7 +235,7 @@ arcade_rotate_fx #(257,224,9,1) arcade_video
         .HSync(hs),
         .VSync(vs),
 
-        .fx(status[5:3]),
+        .fx(fx),
         .no_rotate(status[2])
 );
 
